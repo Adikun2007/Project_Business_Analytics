@@ -166,31 +166,25 @@ def find_website(company_name, city="Pune"):
 # ====================== LLM EXTRACTION (Strong Prompt) ======================
 def llm_extract(text, company_name, segment_hint=""):
     prompt = f"""
-You are an expert Indian business analyst specializing in chemical companies.
-
-Extract information from the provided website text about this company.
+You are an expert Indian chemical industry researcher.
 
 Company: {company_name}
-Segment Hint: {segment_hint}
+Segment: {segment_hint}
 
-Return **ONLY** valid JSON. No extra text.
+Extract information and return **ONLY** valid JSON:
 
 {{
-  "company": "exact official name",
-  "website": "primary website",
-  "city": "main city in India",
-  "segment": "Specialty Chemicals or similar",
-  "description": "2-4 sentence professional summary",
-  "revenue": "e.g. ₹185 Cr (FY24) or unknown",
-  "founder": "Founder / Promoter name(s)",
-  "notes": "Key insights: expansion, exports, certifications, new plant, funding etc."
+  "company": "...",
+  "website": "...",
+  "city": "...",
+  "segment": "...",
+  "description": "2-4 sentence summary",
+  "revenue": "any revenue, turnover, or sales figure you can find (e.g. ₹242 Cr, 40L-1.5Cr, 10-50 Cr etc.) or leave empty string if not found",
+  "founder": "...",
+  "notes": "key business details, products, certifications, exports, expansion etc."
 }}
 
-Rules:
-- Use empty string "" if information is not found.
-- Revenue must include year if possible.
-- Be concise and factual.
-- Never invent information.
+If nothing found for a field, put empty string "".
 
 TEXT:
 {text}
@@ -225,45 +219,92 @@ TEXT:
         print(f"  [LLM Error] {e}")
         return None
 
+def estimate_revenue_from_employees(company_name, text=""):
+    """Improved Employee Count Detection + Revenue Estimation"""
+    if not text:
+        return "unknown"
+    
+    print(f"    [→] Trying to estimate revenue via employee count for: {company_name}")
+    
+    # Much better patterns for employee detection
+    employee_patterns = [
+        r'(\d{1,4})\s*employees?',
+        r'employs?\s*(\d{1,4})',
+        r'team of\s*(\d{1,4})',
+        r'(\d{1,4})\s*people',
+        r'(\d{1,4})\s*staff',
+        r'over\s*(\d{1,4})\s*employees',
+        r'about\s*(\d{1,4})\s*employees',
+        r'(\d{2,4})\s*member',
+    ]
+    
+    emp_count = None
+    for pattern in employee_patterns:
+        match = re.search(pattern, text, re.I)
+        if match:
+            try:
+                emp_count = int(match.group(1))
+                print(f"    [✓] Detected {emp_count} employees")
+                break
+            except:
+                continue
+    
+    if not emp_count or emp_count < 5:
+        return "unknown"
+    
+    # More aggressive estimation (as per your preference)
+    if emp_count <= 20:
+        est = "15-40 Cr"
+    elif emp_count <= 50:
+        est = "50-120 Cr"           # ~100 Cr for 50 employees
+    elif emp_count <= 100:
+        est = "100-250 Cr"
+    elif emp_count <= 200:
+        est = "200-500 Cr"
+    else:
+        est = f"~{int(emp_count * 2.2)} Cr"
+    
+    final_estimate = f"~{est} (est. based on {emp_count} employees)"
+    print(f"    [→] Employee-based Revenue Estimate: {final_estimate}")
+    
+    return final_estimate
+    
 def quick_revenue_lookup(company_name):
-    """Advanced Revenue Lookup - Works like manual Google search"""
     print(f"    [→] Revenue Search: {company_name}")
     
     queries = [
-        f"{company_name} revenue OR turnover OR sales OR funding",
-        f"{company_name} annual revenue",
-        f"{company_name} FY24 OR FY23 OR FY25"
+        f"{company_name} revenue OR turnover OR crore OR tofler",
+        f"{company_name} \"annual turnover\"",
+        f"{company_name} zaubacorp",
+        f"{company_name} financials OR FY24"
     ]
     
     for query in queries:
         try:
-            r = safe_get(f"https://html.duckduckgo.com/html/?q={quote_plus(query)}", timeout=12)
-            if not r:
+            r = safe_get(f"https://html.duckduckgo.com/html/?q={quote_plus(query)}", timeout=20)
+            if not r: 
                 continue
                 
-            soup = BeautifulSoup(r.text, "html.parser")
-            full_text = soup.get_text()[:15000]   # Search in first 15k chars
+            text = BeautifulSoup(r.text, "html.parser").get_text()[:30000]
             
-            # Multiple flexible patterns
+            # Strong patterns
             patterns = [
-                r'(?:revenue|turnover|sales).*?(\$?\s*[\d,]+\.?\d*\s*[MKB]?)',
-                r'(?:revenue|turnover|sales).*?(\₹?\s*[\d,]+\.?\d*\s*(?:Cr|Crore|Lakh|Million|Billion)?)',
-                r'(\₹?\$?\s*[\d,]+\.?\d*\s*(?:Cr|Crore|M|Million|K))',
-                r'(\d{1,4}\.?\d*\s*[MmBbKk]?)'
+                r'(\d{1,4}\.?\d*)\s*(?:Cr|Crore)',
+                r'(\₹?\$?[\d,]+\.?\d*)\s*(Cr|Crore|Lakh|Million)',
+                r'(?:turnover|revenue).*?(\d{1,4}\.?\d*)',
             ]
             
             for pattern in patterns:
-                matches = re.findall(pattern, full_text, re.I)
+                matches = re.findall(pattern, text, re.I)
                 if matches:
-                    revenue_str = matches[0] if isinstance(matches[0], str) else matches[0][0]
-                    print(f"    [✓] Revenue Found: {revenue_str}")
-                    return revenue_str.strip()
-                    
-        except Exception as e:
+                    revenue = str(matches[0]).strip() if isinstance(matches[0], str) else str(matches[0][0])
+                    if len(revenue) >= 2:
+                        print(f"    [✓] Revenue Found → {revenue}")
+                        return revenue + " Cr (approx)"
+        except:
             continue
             
-    print("    [⚠] No revenue found")
-    return ""
+    return "unknown"
 
 # ====================== ENRICHMENT ======================
 def enrich_company(row, segment_hint=""):
@@ -271,17 +312,31 @@ def enrich_company(row, segment_hint=""):
     website = row.get("website", "")
 
     # 1. Find website if missing
-    if not website or len(website) < 15:
+    if not website or len(str(website)) < 15:
         website = find_website(company_name, row.get("city", "Pune"))
         sleep_random()
 
-    # 2. Scrape website
+        # 2. Improved Scraping - Try multiple pages
     text = ""
     if website:
         print(f"    [→] Scraping: {website}")
-        r = safe_get(website)
-        if r and r.status_code == 200:
-            text = extract_text(r.text)
+        pages_to_try = [website]
+        
+        # Add common financial/about pages
+        parsed = urlparse(website)
+        base = f"{parsed.scheme}://{parsed.netloc}"
+        extra_pages = ["/about", "/about-us", "/investors", "/financials", "/annual-report"]
+        
+        for slug in extra_pages:
+            pages_to_try.append(base + slug)
+        
+        for page_url in pages_to_try[:5]:
+            r = safe_get(page_url)
+            if r and r.status_code == 200:
+                page_text = extract_text(r.text, max_chars=8000)
+                text += " " + page_text
+                print(f"    [✓] Scraped extra page: {page_url}")
+                sleep_random(0.8, 1.5)
 
     # 3. LLM Enrichment
     extracted = llm_extract(text, company_name, segment_hint) if text else None
@@ -297,17 +352,21 @@ def enrich_company(row, segment_hint=""):
         "notes": ""
     }
 
-        # After LLM extraction
+    # Merge LLM output
     if extracted:
-        for k in result.keys():
-            if k in extracted and extracted[k]:
+        for k in ["company", "website", "city", "segment", "description", "revenue", "founder", "notes"]:
+            if k in extracted and extracted.get(k):
                 result[k] = str(extracted.get(k)).strip()
 
-    # Fallback / Additional Revenue Search
-    if not result.get("revenue") or len(result.get("revenue", "")) < 3:
+    if not result.get("revenue") or str(result.get("revenue")).strip() in ["", "unknown", "N/A"]:
         result["revenue"] = quick_revenue_lookup(company_name)
 
-    return result
+    if not result.get("revenue") or str(result.get("revenue")).strip() in ["", "unknown", "N/A"]:
+        result["revenue"] = estimate_revenue_from_employees(company_name, text)   # ← This should now work better
+
+    return result   # ← This was missing in some paths
+    # 1. Find website if
+
 
 # ====================== MAIN ======================
 def main():
