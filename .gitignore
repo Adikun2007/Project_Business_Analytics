@@ -1,0 +1,9 @@
+# apikey.env
+# .env
+# .virtual_documents/
+# __pycache__/
+# *.pyc
+apikey.env
+__pycache__/
+.virtual_documents/
+*.pyc
